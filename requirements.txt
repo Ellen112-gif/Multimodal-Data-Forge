@@ -1,0 +1,10 @@
+ray
+torch
+transformers
+opencv-python
+Pillow
+PyYAML
+numpy
+matplotlib
+pytest
+pandas

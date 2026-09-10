@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# R
+.Rhistory
+.RData
+.Ruserdata
+
+# Logs
+*.log
+
+# Model / ML cache
+.cache/
+huggingface/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Visual Genome images
+data/visual_genome/images/
+
+# Generated outputs
+outputs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Visual Genome raw archives
+data/visual_genome/*.zip

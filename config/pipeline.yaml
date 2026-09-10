@@ -1,0 +1,45 @@
+input:
+  source: visual_genome
+  path: "data/visual_genome/samples.jsonl"
+
+output:
+  dataset_path: "outputs/dataset.jsonl"
+  metrics_path: "outputs/metrics.json"
+
+executor:
+  type: ray
+  num_workers: 2
+  batch_size: 2
+  address: null
+
+pipeline:
+  operators:
+
+    - name: validator
+      enabled: true
+
+    - name: image_loader
+      enabled: true
+
+    - name: resolution_filter
+      enabled: true
+      params:
+        min_width: 512
+        min_height: 512
+
+    - name: blur_filter
+      enabled: true
+      params:
+        threshold: 100.0
+
+    - name: clip_alignment
+      enabled: true
+      params:
+        threshold: 0.20
+
+annotation:
+  enabled: true
+  model_name: "Salesforce/blip-image-captioning-base"
+  batch_size: 4
+  max_samples: 10
+  output_path: "outputs/annotations.jsonl"
