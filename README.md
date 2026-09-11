@@ -1,265 +1,162 @@
 # Multimodal-Data-Forge
 
-> **Quality-aware distributed multimodal data curation, auto-annotation,
-> and serving pipeline for image-text datasets.**
+> **Quality-aware distributed multimodal data curation, auto-annotation, and serving pipeline for image-text datasets.**
 
-Multimodal-Data-Forge is an engineering-oriented pipeline for preparing
-image-text data for multimodal model training. It combines configurable
-quality filtering, CLIP-based alignment, semantic deduplication,
-quality-aware representative selection, Ray-based parallel execution,
-BLIP auto-annotation, and a lightweight Ray Serve inference API.
+Multimodal-Data-Forge is an engineering-oriented pipeline for preparing image-text data for multimodal model training. It combines configurable quality filtering, CLIP-based alignment, semantic deduplication, quality-aware representative selection, Ray-based parallel execution, BLIP auto-annotation, and a lightweight Ray Serve inference API.
 
-The project is evaluated on a **1,000-sample Visual Genome subset** and
-includes reproducible benchmarks and tests.
+The project is evaluated on a **1,000-sample Visual Genome subset** and includes reproducible benchmarks and tests.
 
-```{=html}
-<p align="center">
-```
-`<img src="assets/architecture.png" alt="Multimodal-Data-Forge architecture" width="900">`{=html}
-```{=html}
-</p>
-```
+![Multimodal-Data-Forge Architecture](assets/architecture.png)
 
-------------------------------------------------------------------------
+---
 
 ## Highlights
 
-  Capability                Implementation
-  ------------------------- -------------------------------------------------
-  Real multimodal data      Visual Genome image-text subset
-  Unified ingestion         `VisualGenomeAdapter` → `MultimodalSample`
-  Quality filtering         Resolution, blur, and CLIP alignment filters
-  Distributed execution     Local and Ray `ActorPool` executors
-  Semantic deduplication    CLIP embeddings + cosine similarity
-  Quality-aware selection   Resolution + sharpness + alignment score
-  Auto-annotation           BLIP image captioning with true batch inference
-  Online serving            Ray Serve HTTP endpoint
-  Validation                6 pytest tests, including Local/Ray consistency
-  Benchmarking              100 / 500 / 1,000-sample scaling experiments
+| Capability | Implementation |
+| --- | --- |
+| Real multimodal data | Visual Genome image-text subset |
+| Unified ingestion | `VisualGenomeAdapter` -> `MultimodalSample` |
+| Quality filtering | Resolution, blur, and CLIP alignment filters |
+| Distributed execution | Local executor and Ray `ActorPool` executor |
+| Semantic deduplication | CLIP embeddings + cosine similarity |
+| Quality-aware selection | Resolution + sharpness + alignment score |
+| Auto-annotation | BLIP image captioning with batch inference |
+| Online serving | Ray Serve HTTP endpoint |
+| Validation | 6 pytest tests, including Local/Ray consistency |
+| Benchmarking | 100 / 500 / 1,000-sample scaling experiments |
 
-------------------------------------------------------------------------
+---
 
 ## Pipeline
 
-``` text
+```text
 Visual Genome
-      │
-      ▼
+      |
+      v
 VisualGenomeAdapter
-      │
-      ▼
+      |
+      v
 MultimodalSample
-      │
-      ▼
-┌─────────────────────────────┐
-│     Sample-Level Pipeline   │
-│                             │
-│  Validator                  │
-│      ↓                      │
-│  Image Loader               │
-│      ↓                      │
-│  Resolution Filter          │
-│      ↓                      │
-│  Blur Filter                │
-│      ↓                      │
-│  CLIP Alignment Filter      │
-└──────────────┬──────────────┘
-               │
-        Local / Ray Executor
-               │
-               ▼
-      Semantic Deduplication
-               │
-               ▼
-      Quality-Aware Selection
-               │
-               ▼
-        Curated Dataset
-               │
-               ▼
-        BLIP Auto-Annotation
+      |
+      v
+Validator -> Image Loader -> Resolution Filter -> Blur Filter -> CLIP Alignment
+      |
+      v
+Local / Ray Executor
+      |
+      v
+Semantic Deduplication
+      |
+      v
+Quality-Aware Selection
+      |
+      v
+Curated Dataset
+      |
+      v
+BLIP Auto-Annotation
 
-Separate online path:
-VLMAnnotator → Ray Serve → HTTP API
+Online path: VLMAnnotator -> Ray Serve -> HTTP API
 ```
 
-The pipeline separates **sample-level operations**, which can run in
-parallel, from **dataset-level semantic deduplication**, which requires
-a global view of the accepted samples.
+Sample-level operators can run in parallel, while semantic deduplication runs after merging because it requires a global dataset view.
 
-------------------------------------------------------------------------
+---
 
 ## Quality Curation
 
-Each image-text sample passes through a configurable operator chain.
+| Stage | Purpose | Main Signal |
+| --- | --- | --- |
+| Validator | Reject malformed samples | Required fields |
+| Image Loader | Verify and decode images | File validity |
+| Resolution Filter | Remove undersized images | Width / height |
+| Blur Filter | Remove low-sharpness images | Laplacian variance |
+| CLIP Alignment | Remove weak image-text pairs | CLIP similarity |
+| Semantic Dedup | Detect near-duplicate samples | CLIP embedding similarity |
+| Quality Selection | Keep the better duplicate representative | Composite quality score |
 
-  -----------------------------------------------------------------------
-  Stage                   Purpose                 Main signal
-  ----------------------- ----------------------- -----------------------
-  Validator               Reject malformed        Required fields
-                          samples                 
-
-  Image Loader            Verify and decode       File validity
-                          images                  
-
-  Resolution Filter       Remove undersized       Width / height
-                          images                  
-
-  Blur Filter             Remove low-sharpness    Laplacian variance
-                          images                  
-
-  CLIP Alignment          Remove weak image-text  CLIP similarity
-                          pairs                   
-
-  Semantic Dedup          Detect near-duplicate   CLIP embedding
-                          samples                 similarity
-
-  Quality Selection       Keep the better         Composite quality score
-                          duplicate               
-                          representative          
-  -----------------------------------------------------------------------
-
-Operators are created from `config/pipeline.yaml`, making thresholds and
-execution settings configurable without changing pipeline code.
+Operators and thresholds are configured in `config/pipeline.yaml`.
 
 ### Quality-aware duplicate selection
 
-When highly similar samples are found, the representative is selected
-using a heuristic quality score:
-
-``` text
+```text
 quality =
-    0.2 × resolution_score
-  + 0.3 × sharpness_score
-  + 0.5 × alignment_score
+    0.2 * resolution_score
+  + 0.3 * sharpness_score
+  + 0.5 * alignment_score
 ```
 
-where:
-
-``` text
-resolution_score = min(width × height / (1920 × 1080), 1)
-
-sharpness_score = min(blur_score / 500, 1)
-
-alignment_score = clip_score clipped to [0, 1]
+```text
+resolution_score = min(width * height / (1920 * 1080), 1)
+sharpness_score  = min(blur_score / 500, 1)
+alignment_score  = clip_score clipped to [0, 1]
 ```
 
-This score is an engineering heuristic used for representative
-selection; it is not a learned quality model.
+This is an engineering heuristic for representative selection, not a learned quality model.
 
-------------------------------------------------------------------------
+---
 
-## Visual Genome Results
+## Data Curation Results
 
-The current evaluation uses **1,000 Visual Genome image-text samples**.
+Evaluation dataset: **1,000 Visual Genome image-text samples**.
 
-  Stage                      Remaining   Removed
-  ------------------------ ----------- ---------
-  Input                          1,000       ---
-  Resolution filter                809       191
-  Blur filter                      775        34
-  CLIP alignment                   671       104
-  Semantic deduplication           664         7
+| Stage | Remaining | Removed |
+| --- | ---: | ---: |
+| Input | 1,000 | - |
+| Resolution Filter | 809 | 191 |
+| Blur Filter | 775 | 34 |
+| CLIP Alignment | 671 | 104 |
+| Semantic Deduplication | **664** | 7 |
 
-Final result:
+Final result: **664 curated samples** and **336 filtered or deduplicated samples**.
 
-``` text
-1,000 input samples
-      ↓
-664 curated samples
-336 rejected / deduplicated
-```
-
-The filtering stages therefore provide an auditable data-curation funnel
-rather than only producing a final dataset.
-
-------------------------------------------------------------------------
+---
 
 ## Distributed Execution
 
-The same operator pipeline can run through either:
+The same quality pipeline supports `LocalExecutor` and `RayExecutor`. `RayExecutor` uses persistent Ray actors and `ActorPool` for batch-level parallel processing.
 
-``` text
-LocalExecutor
-```
+### Scaling Benchmark
 
-or:
+Each configuration was executed **3 times**; the median is reported.
 
-``` text
-RayExecutor
-```
+| Samples | Executor | Median Time (s) | Throughput (samples/s) | Accepted | Rejected |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 100 | Local | 17.33 | 5.77 | 60 | 40 |
+| 100 | Ray-2W | 17.65 | 5.67 | 60 | 40 |
+| 100 | Ray-4W | 14.17 | 7.06 | 60 | 40 |
+| 500 | Local | 105.74 | 4.73 | 329 | 171 |
+| 500 | Ray-2W | 91.16 | 5.48 | 329 | 171 |
+| 500 | Ray-4W | 64.19 | 7.79 | 329 | 171 |
+| 1,000 | Local | 217.42 | 4.60 | 671 | 329 |
+| 1,000 | Ray-2W | 180.03 | 5.55 | 671 | 329 |
+| 1,000 | Ray-4W | 124.33 | **8.04** | 671 | 329 |
 
-`RayExecutor` uses persistent Ray actors and `ActorPool` for batch-level
-parallel processing. Local and Ray execution share the same pipeline
-logic.
+At 1,000 samples, Ray-4W increased throughput from **4.60 to 8.04 samples/s (1.75x)** and reduced execution time from **217.42 s to 124.33 s**, while preserving the same accepted/rejected results.
 
-### Scaling benchmark
+![Scaling Benchmark](assets/scaling_benchmark.png)
 
-Each configuration was run **3 times**, with the median reported.
+The benchmark reflects the tested single-machine workload; it does not claim linear or multi-node scaling.
 
-  ----------------------------------------------------------------------------
-       Samples Executor    Median Time    Throughput     Accepted     Rejected
-                                   (s)   (samples/s)              
-  ------------ ---------- ------------ ------------- ------------ ------------
-           100 Local             17.33          5.77           60           40
-
-           100 Ray-2W            17.65          5.67           60           40
-
-           100 Ray-4W            14.17          7.06           60           40
-
-           500 Local            105.74          4.73          329          171
-
-           500 Ray-2W            91.16          5.48          329          171
-
-           500 Ray-4W            64.19          7.79          329          171
-
-         1,000 Local            217.42          4.60          671          329
-
-         1,000 Ray-2W           180.03          5.55          671          329
-
-         1,000 Ray-4W           124.33      **8.04**          671          329
-  ----------------------------------------------------------------------------
-
-At 1,000 samples, Ray with four workers increased throughput from **4.60
-to 8.04 samples/s (1.75×)** and reduced execution time from **217.42 s
-to 124.33 s**, while preserving the same accepted/rejected results.
-
-```{=html}
-<p align="center">
-```
-`<img src="assets/scaling_benchmark.png" alt="Scaling benchmark" width="760">`{=html}
-```{=html}
-</p>
-```
-The benchmark demonstrates useful parallel scaling on the tested
-workload; it does **not** claim linear scaling or multi-node
-performance.
-
-------------------------------------------------------------------------
+---
 
 ## VLM Auto-Annotation
 
-Curated samples can optionally be passed to a BLIP captioning stage:
+Curated samples can optionally be passed to BLIP caption generation.
 
-``` text
-Curated Samples
-      ↓
-VLMAnnotator
-      ↓
-BLIP Batch Inference
-      ↓
-annotations.jsonl
+```text
+Curated Samples -> VLMAnnotator -> BLIP Batch Inference -> annotations.jsonl
 ```
 
-Current model:
+Model:
 
-``` text
+```text
 Salesforce/blip-image-captioning-base
 ```
 
-Example output:
+Example:
 
-``` json
+```json
 {
   "sample_id": "vg_000001",
   "image_path": "data/visual_genome/images/vg_000001.jpg",
@@ -270,40 +167,38 @@ Example output:
 }
 ```
 
-Annotation can be enabled or disabled in YAML and supports configurable
-batch size and sample limits.
+The annotation stage is configurable through YAML and supports batch inference.
 
-------------------------------------------------------------------------
+---
 
 ## Ray Serve API
 
-The same `VLMAnnotator` is reused by a lightweight Ray Serve deployment
-for online inference.
+The same `VLMAnnotator` is reused by a lightweight Ray Serve deployment.
 
-Start the service:
+Start:
 
-``` powershell
+```bash
 serve run src.serving.vlm_service:app
 ```
 
-The local endpoint is:
+Endpoint:
 
-``` text
+```text
 POST http://127.0.0.1:8000/
 ```
 
-Example request body:
+Request:
 
-``` json
+```json
 {
   "sample_id": "test_001",
   "image_path": "data/visual_genome/images/vg_000001.jpg"
 }
 ```
 
-Example response:
+Response:
 
-``` json
+```json
 {
   "sample_id": "test_001",
   "image_path": "data/visual_genome/images/vg_000001.jpg",
@@ -314,16 +209,13 @@ Example response:
 }
 ```
 
-This is a local proof-of-concept serving path using server-accessible
-image paths, not a production upload service.
+This is a local proof-of-concept service using server-accessible image paths, not a production upload API.
 
-------------------------------------------------------------------------
+---
 
 ## Configuration
 
-Core behavior is controlled through `config/pipeline.yaml`.
-
-``` yaml
+```yaml
 input:
   source: visual_genome
   path: "data/visual_genome/samples.jsonl"
@@ -342,21 +234,17 @@ pipeline:
   operators:
     - name: validator
       enabled: true
-
     - name: image_loader
       enabled: true
-
     - name: resolution_filter
       enabled: true
       params:
         min_width: 512
         min_height: 512
-
     - name: blur_filter
       enabled: true
       params:
         threshold: 100.0
-
     - name: clip_alignment
       enabled: true
       params:
@@ -370,253 +258,175 @@ annotation:
   output_path: "outputs/annotations.jsonl"
 ```
 
-------------------------------------------------------------------------
+---
 
 ## Project Structure
 
-``` text
+```text
 Multimodal-Data-Forge/
-│
-├── assets/
-│   ├── architecture.png
-│   └── scaling_benchmark.png
-│
-├── benchmarks/
-│   ├── benchmark_cold_steady.py
-│   ├── benchmark_executor.py
-│   ├── plot_scaling_benchmark.py
-│   └── scaling_results.csv
-│
-├── config/
-│   └── pipeline.yaml
-│
-├── data/
-│   └── visual_genome/
-│       └── samples.jsonl
-│
-├── scripts/
-│   ├── batch_annotate.py
-│   ├── download_visual_genome_subset.py
-│   └── test_visual_genome_adapter.py
-│
-├── src/
-│   ├── adapters/
-│   │   └── visual_genome_adapter.py
-│   ├── annotation/
-│   │   ├── annotation_schema.py
-│   │   └── vlm_annotator.py
-│   ├── executors/
-│   │   ├── base_executor.py
-│   │   ├── local_executor.py
-│   │   └── ray_executor.py
-│   ├── operators/
-│   │   ├── base.py
-│   │   ├── validator.py
-│   │   ├── image_loader.py
-│   │   ├── resolution_filter.py
-│   │   ├── blur_filter.py
-│   │   ├── clip_alignment.py
-│   │   └── semantic_dedup.py
-│   ├── schema/
-│   │   └── multimodal_sample.py
-│   ├── serving/
-│   │   └── vlm_service.py
-│   ├── config_loader.py
-│   ├── operator_factory.py
-│   └── pipeline.py
-│
-├── tests/
-│   ├── test_executor_consistency.py
-│   ├── test_quality_filters.py
-│   ├── test_semantic_dedup.py
-│   └── test_validator.py
-│
-├── .gitignore
-├── main.py
-├── requirements.txt
-└── README.md
+|-- assets/
+|   |-- architecture.png
+|   `-- scaling_benchmark.png
+|-- benchmarks/
+|   |-- benchmark_cold_steady.py
+|   |-- benchmark_executor.py
+|   |-- plot_scaling_benchmark.py
+|   `-- scaling_results.csv
+|-- config/
+|   `-- pipeline.yaml
+|-- data/
+|   `-- visual_genome/
+|       `-- samples.jsonl
+|-- scripts/
+|   |-- batch_annotate.py
+|   |-- download_visual_genome_subset.py
+|   `-- test_visual_genome_adapter.py
+|-- src/
+|   |-- adapters/
+|   |-- annotation/
+|   |-- executors/
+|   |-- operators/
+|   |-- schema/
+|   |-- serving/
+|   |-- config_loader.py
+|   |-- operator_factory.py
+|   `-- pipeline.py
+|-- tests/
+|   |-- test_executor_consistency.py
+|   |-- test_quality_filters.py
+|   |-- test_semantic_dedup.py
+|   `-- test_validator.py
+|-- .gitignore
+|-- main.py
+|-- requirements.txt
+`-- README.md
 ```
 
-Generated outputs and downloaded Visual Genome images are intentionally
-excluded from version control.
+Downloaded Visual Genome images and generated outputs are excluded from version control.
 
-------------------------------------------------------------------------
+---
 
-## Installation
+## Quick Start
 
-Python 3.9+ is recommended for the current project environment.
-
-``` bash
+```bash
 git clone https://github.com/Ellen112-gif/Multimodal-Data-Forge.git
 cd Multimodal-Data-Forge
-
 pip install -r requirements.txt
 ```
 
-The first CLIP or BLIP run may download pretrained model weights from
-Hugging Face.
+Prepare the Visual Genome subset:
 
-------------------------------------------------------------------------
-
-## Prepare Visual Genome Data
-
-Download the project subset:
-
-``` bash
+```bash
 python scripts/download_visual_genome_subset.py
 ```
 
-The script prepares:
+Run:
 
-``` text
-data/visual_genome/images/
-data/visual_genome/samples.jsonl
-```
-
-The raw Visual Genome archives and downloaded images are excluded from
-Git.
-
-------------------------------------------------------------------------
-
-## Run the Pipeline
-
-Run using the executor configured in YAML:
-
-``` bash
+```bash
 python main.py
 ```
 
 Typical outputs:
 
-``` text
+```text
 outputs/dataset.jsonl
 outputs/metrics.json
 outputs/annotations.jsonl
 ```
 
-To switch execution mode, edit:
+The first CLIP or BLIP run may download pretrained model weights.
 
-``` yaml
-executor:
-  type: local
-```
-
-or:
-
-``` yaml
-executor:
-  type: ray
-  num_workers: 4
-```
-
-------------------------------------------------------------------------
+---
 
 ## Reproduce Benchmarks
 
 Formal scaling benchmark:
 
-``` bash
+```bash
 python benchmarks/benchmark_executor.py
 ```
 
-Cold-start vs steady-state benchmark:
+Cold-start vs. steady-state benchmark:
 
-``` bash
+```bash
 python benchmarks/benchmark_cold_steady.py
 ```
 
-Scaling results are saved to:
+Results:
 
-``` text
+```text
 benchmarks/scaling_results.csv
 ```
 
-------------------------------------------------------------------------
+---
 
 ## Tests
 
-Run:
-
-``` bash
+```bash
 python -m pytest tests -v
 ```
 
 Current result:
 
-``` text
+```text
 6 passed
 ```
 
-The test suite covers:
+Tests cover Local/Ray result consistency, resolution filtering, quality-aware scoring, validation, and missing image-path rejection.
 
--   Local/Ray executor result consistency
--   resolution acceptance and rejection
--   quality-aware representative scoring
--   valid sample validation
--   missing image-path rejection
-
-------------------------------------------------------------------------
+---
 
 ## Tech Stack
 
-  Area                        Technologies
-  --------------------------- --------------------
-  Language                    Python
-  Distributed processing      Ray, ActorPool
-  Model serving               Ray Serve
-  Vision / image processing   OpenCV, Pillow
-  Multimodal embeddings       CLIP
-  Auto-annotation             BLIP, Transformers
-  Deep learning               PyTorch
-  Configuration               YAML
-  Testing                     pytest
+| Area | Technologies |
+| --- | --- |
+| Language | Python |
+| Distributed Processing | Ray, ActorPool |
+| Model Serving | Ray Serve |
+| Image Processing | OpenCV, Pillow |
+| Multimodal Embeddings | CLIP |
+| Auto-Annotation | BLIP, Transformers |
+| Deep Learning | PyTorch |
+| Configuration | YAML |
+| Testing | pytest |
 
-------------------------------------------------------------------------
+---
 
 ## Scope and Limitations
 
-This repository is designed as a compact multimodal data-infrastructure
-project rather than a production-scale platform.
+**Current scope**
 
-Current scope:
+- single-machine Local/Ray execution
+- Visual Genome image-text ingestion
+- CLIP-based filtering and semantic deduplication
+- full pairwise similarity for the current dataset size
+- heuristic quality-aware representative selection
+- BLIP caption generation
+- local Ray Serve inference
 
--   single-machine Local/Ray execution
--   Visual Genome image-text ingestion
--   CLIP-based filtering and deduplication
--   full pairwise similarity for the current dataset size
--   heuristic quality-aware representative selection
--   BLIP caption generation
--   local Ray Serve inference
+**Not currently implemented**
 
-Not currently implemented:
+- multi-node cluster deployment
+- ANN/vector-database deduplication at very large scale
+- video, audio, robot trajectory, action/state, or ROS data
+- learned multimodal quality scoring
+- production authentication, object storage, or upload APIs
 
--   multi-node cluster deployment
--   ANN/vector-database deduplication at very large scale
--   video, audio, robot trajectory, action/state, or ROS data
--   learned multimodal quality scoring
--   production authentication, object storage, or upload APIs
+These boundaries keep the benchmark and functionality claims aligned with the implemented system.
 
-These boundaries are intentional so that benchmark and functionality
-claims remain reproducible and aligned with the implemented system.
-
-------------------------------------------------------------------------
+---
 
 ## Summary
 
-Multimodal-Data-Forge demonstrates an end-to-end multimodal data
-engineering workflow:
-
-``` text
+```text
 Real Data
-  → Validation
-  → Quality Filtering
-  → Distributed Processing
-  → Semantic Deduplication
-  → Quality-Aware Selection
-  → VLM Auto-Annotation
-  → Lightweight Online Serving
+   -> Validation
+   -> Quality Filtering
+   -> Distributed Processing
+   -> Semantic Deduplication
+   -> Quality-Aware Selection
+   -> VLM Auto-Annotation
+   -> Lightweight Online Serving
 ```
 
-The project focuses on **data quality, reproducible engineering,
-distributed execution, and model-ready dataset preparation** rather than
-training a new multimodal model.
+Multimodal-Data-Forge focuses on **data quality, reproducible engineering, distributed execution, and model-ready dataset preparation** rather than training a new multimodal model.
